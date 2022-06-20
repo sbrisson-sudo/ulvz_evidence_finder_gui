@@ -1,0 +1,4 @@
+- different stream -> different colors
+- phases
+- 0 time on a phase arrival
+- along azimuth
