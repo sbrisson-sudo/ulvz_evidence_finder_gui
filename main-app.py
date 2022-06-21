@@ -1,3 +1,10 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Jun 20 2022
+@author: Sylvain Brisson sylvain.brisson@ens.fr
+"""
+
 import sys
 import matplotlib
 matplotlib.use('Qt5Agg')
@@ -582,7 +589,7 @@ class MainWindow(QMainWindow):
             
             # print("[compute azimuth]", [tr.stats.coordinates["latitude"],tr.stats.coordinates["longitude"]], tr.stats.azimuth)
             
-        self.set_azimuth_bounds_slider(stream)
+        # self.set_azimuth_bounds_slider(stream)
             
     def set_azimuth_bounds_slider(self, stream):
         
@@ -654,7 +661,7 @@ class MainWindow(QMainWindow):
             type='section', 
             # dist_degree=True, 
             # ev_coord = (self.lat_event,self.lon_event),
-            # norm_method = args.norm,
+            norm_method = "trace",
             scale = self.get_scale(),
             show=False, 
             reftime = self.origin_time_event,
@@ -784,7 +791,9 @@ class MainWindow(QMainWindow):
         
         self.compute_azimuth(self.stream)
         
-        self.update_stream_az_or_dist()
+        self.update_stream_azimuth()
+        
+        self.update_stream_az_or_dist()    
         
         self.multiply_distance_by_1000()
         
@@ -870,6 +879,14 @@ class MainWindow(QMainWindow):
         to_remove = []
         for trace in self.stream.traces:
             if not(self.dmin <= trace.stats.distance and self.dmax >= trace.stats.distance):
+                to_remove.append(trace)
+        for trace in to_remove:
+            self.stream.remove(trace)
+            
+    def update_stream_azimuth(self):
+        to_remove = []
+        for trace in self.stream.traces:
+            if not(self.azmin <= trace.stats.azimuth and self.azmax >= trace.stats.azimuth):
                 to_remove.append(trace)
         for trace in to_remove:
             self.stream.remove(trace)
@@ -1052,7 +1069,40 @@ class MainWindow(QMainWindow):
                 self.lon_ulvz,
                 self.lat_ulvz, 
                 marker="o", color="orange", s = 100, transform = ccrs.PlateCarree(), label="ulvz")
+                    
+    def compute_mean_point_stations_event(self):
+        """Compute the mean points to set the projection"""
         
+        # Compute the barycenter of receivers
+        lat_mean_stn, lon_mean_stn = barycenter_on_sphere(self.stations["lat"], self.stations["lon"])
+        
+        # Barycenter of event and stations barycenter
+        lat_mean,lon_mean = barycenter_on_sphere([lat_mean_stn,self.lat_event],[lon_mean_stn,self.lon_event])
+        
+        return lat_mean,lon_mean
+        
+        
+def barycenter_on_sphere(lats,lons):
+    """Compute the mean point of the clouds points lats,lons, all inputs and outputs in degrees"""
+    
+    lats,lons = np.asanyarray(lats)*np.pi/180., np.asanyarray(lons)*np.pi/180.
+    
+     # Convert lat/lon (must be in radians) to Cartesian coordinates for each location.
+    X = cos(lats) * cos(lons)
+    Y = cos(lats) * sin(lons)
+    Z = sin(lats)
+
+    # Compute average x, y and z coordinates.
+    x_mean = X.sum()/len(X)
+    y_mean = Y.sum()/len(Y)
+    z_mean = Z.sum()/len(Z)
+
+    # Convert average x, y, z coordinate to latitude and longitude.
+    lon_mean = np.atan2(y_mean, x_mean)
+    Hyp = np.sqrt(x_mean * x_mean + y_mean * y_mean)
+    lat_mean = np.atan2(z_mean, Hyp)
+    
+    return lat_mean*180./np.pi,lon_mean*180./np.pi
 
 app = QApplication(sys.argv)
 w = MainWindow()
