@@ -18,11 +18,11 @@ from matplotlib.figure import Figure
 
 from matplotlib.transforms import blended_transform_factory
 
-import cartopy
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 
 import numpy as np
+import pandas as pd
 
 from numpy import cos, sin, arccos, pi
 
@@ -31,12 +31,15 @@ from obspy.geodetics import locations2degrees
 from obspy.taup import TauPyModel
 from obspy.taup.utils import get_phase_names
 
-
 taup_model = TauPyModel(model="prem")
 
 import os               
             
 from spherical_angle import spherical_angle as get_angle
+
+sys.path.append("/home/sbrisson/documents/Geosciences/stage-BSL/tools/bsl_toolbox/plotting")
+
+from A3Dmodel_map_greatCircles import plot_model, plot_hotspots, plot_great_circles
 
 class MplCanvas(FigureCanvasQTAgg):
 
@@ -46,20 +49,110 @@ class MplCanvas(FigureCanvasQTAgg):
         self.axes = self.fig.add_subplot(111)
         super(MplCanvas, self).__init__(self.fig)
         
+        
+class LowerThresholdOthographic(ccrs.Orthographic):
+    @property
+    def threshold(self):
+        return 1e3
 class MplCanvasGeo(FigureCanvasQTAgg):
     
-    def __init__(self, parent=None, width=5, height=4, dpi=100):
+    def __init__(self, parent=None, width=5, height=4, dpi=100, proj=ccrs.Robinson()):
         
-        self.proj = ccrs.Robinson()
+        self.proj = proj
         fig = Figure(figsize=(width, height), dpi=dpi)
         self.axes = fig.add_subplot(111, projection=self.proj)
         super(MplCanvasGeo, self).__init__(fig)
 
-class GraphWindow(QMainWindow):
+class MapModelGreatCirlesWindow(QMainWindow):
+    
+    def __init__(self, mainWindow, *args, **kwargs):
+        
+        super(MapModelGreatCirlesWindow, self).__init__(*args, **kwargs)
+        
+        self.mainWindow = mainWindow
+        
+        self.setWindowTitle("SEMUCB-WM1 and great circles path map")
+        
+        w = 600
+        h = 400
+        self.resize(w,h)
+        
+        # compute projection center points
+        lat0,lon0 = self.mainWindow.compute_mean_point_stations_event()
+        
+        print("lat0,lon0 = ",lat0,lon0)
+        
+        # set projection
+        proj = LowerThresholdOthographic(
+            central_latitude=lat0,
+            central_longitude=lon0
+        )
+        
+        self.canvas_geo = MplCanvasGeo(self, width=6, height=4, dpi=100, proj=proj)
+        toolbar_geo = NavigationToolbar(self.canvas_geo, self)
+
+        layout_plot = QVBoxLayout()
+        layout_plot.addWidget(toolbar_geo)
+        layout_plot.addWidget(self.canvas_geo)
+        
+        self.initiate_map()
+        self.plot_map()
+        # try:
+        #     self.plot_map()
+        # except AttributeError:
+        #     # no data loaded yet
+        #     pass
+        
+        # Create a placeholder widget to hold our toolbar and canvas.
+        widget = QWidget()
+        widget.setLayout(layout_plot)
+        self.setCentralWidget(widget)
+        
+    def initiate_map(self):
+            
+        ax = self.canvas_geo.axes
+        
+        ax.set_global()
+        ax.coastlines()
+        ax.gridlines(linestyle=":", color="k")
+        
+    def plot_map(self):
+        
+        ax = self.canvas_geo.axes
+        
+        ax.cla()
+                
+        # plotting model
+        plot_model(ax)
+        
+        # plot hotspots
+        plot_hotspots(ax) 
+        
+        # plot great_circles
+        stations = pd.DataFrame.from_dict(self.mainWindow.stations)
+        print(stations)
+        
+        plot_great_circles(
+            self.mainWindow.lat_event,
+            self.mainWindow.lon_event,
+            stations,ax)
+        
+        # plot source position
+        ax.scatter(self.mainWindow.lon_event, self.mainWindow.lat_event, marker="*", color="r", s = 100, transform = ccrs.PlateCarree(), label="event")
+                   
+        ax.set_global()     
+        ax.coastlines()
+        ax.gridlines(linestyle=":", color="k")
+        
+        self.canvas_geo.draw()
+
+        
+
+class MapAndStationTableWindow(QMainWindow):
     
     def __init__(self, mainWindow, *args, **kwargs):
     
-        super(GraphWindow, self).__init__(*args, **kwargs)
+        super(MapAndStationTableWindow, self).__init__(*args, **kwargs)
         
         
         self.mainWindow = mainWindow
@@ -527,6 +620,11 @@ class MainWindow(QMainWindow):
         layout_plot_geo.addWidget(button_open_map_window)
         button_open_map_window.clicked.connect(self.open_map_window)
         
+        # Plot map with SEMUCB-WM1 model at CMB in background and GC paths
+        button_open_map_window_gc = QPushButton("Plot with SEMUCB-WM1 and GC paths")
+        layout_plot_geo.addWidget(button_open_map_window_gc)
+        button_open_map_window_gc.clicked.connect(self.open_map_window_gc)
+        
         self.map_window = False
         
         # reset the color of the stream actualization button
@@ -546,6 +644,7 @@ class MainWindow(QMainWindow):
             self.load_pickle(fileName)
             self.initialize_entries()
             self.unset_actualisation_needed()
+            self.multiply_distance_by_1000()
             
     def load_pickle(self, filename):
         
@@ -559,7 +658,7 @@ class MainWindow(QMainWindow):
         self.compute_azimuth(self.stream_orig)
         
         self.stream = self.stream_orig.copy()
-        
+
         # set info in label
         dt = self.stream_orig[0].stats.sampling_rate
         self.label_data.setText(f"{self.stream_orig.count()} traces sampled at {dt:.1f}s ({os.path.getsize(filename)/(1024*1024):.1f}Mo)")
@@ -670,6 +769,10 @@ class MainWindow(QMainWindow):
             orientation = self.get_orientation()
         )
         
+        # plot phases
+        self.plot_phases()
+        
+        # plot stations code
         if self.get_stations_codes():
             self.plot_stations_codes()
             
@@ -719,23 +822,10 @@ class MainWindow(QMainWindow):
             else:
                 self.canvas.axes.set_xlim(self.t_lims)
             
-        
-        
     def initialize_entries(self):
         
         self.component = "Z"
-        
-        # # time bounds
-        # self.tmin = self.stream[0].stats.starttime - self.origin_time_event
-        # self.tmax = self.stream[0].stats.endtime - self.origin_time_event
-        
-        # self.tmin_w.setValue(int(self.tmin))
-        # self.tmin_w.setMinimum(int(self.tmin))
-        # self.tmin_w.setMaximum(int(self.tmax))
-        # self.tmax_w.setValue(int(self.tmax))
-        # self.tmax_w.setMinimum(int(self.tmin))
-        # self.tmax_w.setMaximum(int(self.tmax))
-        
+
         # distance bounds
         self.dmin = 180.0
         self.dmax = 0.0
@@ -782,7 +872,7 @@ class MainWindow(QMainWindow):
             return
         
         self.stream = self.stream_orig.copy()
-        
+                
         self.update_stream_component()
         
         self.update_stream_distance()
@@ -796,9 +886,7 @@ class MainWindow(QMainWindow):
         self.update_stream_az_or_dist()    
         
         self.multiply_distance_by_1000()
-        
-        # self.update_stream_time()
-        
+                
         self.label_stream.setText(f"{self.stream.count()} traces")
         
         self.get_stations_metadata()
@@ -809,17 +897,13 @@ class MainWindow(QMainWindow):
         self.unset_actualisation_needed()
             
     def set_actualisation_needed(self):
-        
-        # print("set_actualisation called")
-        
+                
         if not(self.need_actualisation):
             self.need_actualisation = True
             self.button_stream.setStyleSheet("background-color : yellow")
             
     def unset_actualisation_needed(self):
-        
-        # print("unset_actualisation called")
-            
+                    
         if self.need_actualisation:
             self.need_actualisation = False
             self.button_stream.setStyleSheet("background-color : white")
@@ -891,22 +975,6 @@ class MainWindow(QMainWindow):
         for trace in to_remove:
             self.stream.remove(trace)
             
-    # def set_tmin(self,value):
-    #     self.set_actualisation_needed()
-    #     try:
-    #         self.tmin = float(value)
-    #     except ValueError:
-    #         return
-    # def set_tmax(self,value):
-    #     self.set_actualisation_needed()
-    #     try:
-    #         self.tmax = float(value)
-    #     except ValueError:
-    #         return
-
-    # def update_stream_time(self):
-    #     self.stream.trim(self.origin_time_event + self.tmin, self.origin_time_event + self.tmax)
-        
     def get_scale(self):
         return np.exp(np.log(self.smax+1)/1000*self.scale_w.value())-1.
     
@@ -968,23 +1036,6 @@ class MainWindow(QMainWindow):
                 )[0].time
             
             tr.stats.starttime -= t_arr
-            
-    #     self.change_time_bounds_relative()
-            
-    # def change_time_bounds_relative(self):
-        
-    #     tmax_rel = self.stream[0].stats.endtime - self.origin_time_event
-        
-    #     self.tmin = -20
-    #     self.tmax = 100
-        
-    #     self.tmin_w.setValue(-20)
-    #     self.tmin_w.setMinimum(-int(tmax_rel))
-    #     self.tmin_w.setMaximum(int(tmax_rel))
-    #     self.tmax_w.setValue(100)
-    #     self.tmax_w.setMinimum(-int(tmax_rel))
-    #     self.tmax_w.setMaximum(int(tmax_rel))
-        
 
     def get_orientation(self):
         
@@ -992,10 +1043,8 @@ class MainWindow(QMainWindow):
     
     def get_phases(self):
         
-        phase_list = self.phase_list_w.text
-        
-        print(phase_list.split())
-        
+        phase_list = self.phase_list_w.text().split()
+                
         for p in phase_list:
             if p not in get_phase_names("ttall"):
                 phase_list.remove(p)
@@ -1003,6 +1052,65 @@ class MainWindow(QMainWindow):
                 
         return phase_list
     
+    def plot_phases(self):
+        
+        phase_list = self.get_phases()
+        
+        # only if plotting along distance
+        if len(phase_list) == 0 or self.az_or_dist_w.currentIndex() == 1.: return
+        
+        if self.phase_ref_w.currentIndex() != 0:
+            print("WARNING : plotting phases relative to a phase arrival not implemnted yet")
+            return 
+        
+        ax = self.canvas.axes 
+                   
+        d1, d2 = ax.get_xlim() if self.get_orientation() == "vertical" else ax.get_ylim()
+
+        model_name="iasp91"
+        model = TauPyModel(model=model_name)
+        
+        
+        print(f"Computing phases time arrivals for model {model_name} and the following phases : {phase_list}, for offset in [{d1:.2f},{d2:.2f}]° at depth={self.depth_event:.2f}km")    
+
+        dist = np.linspace(d1, d2, 50)
+        
+        phase_arrival_time = dict(zip(phase_list,[[] for i in range(len(phase_list))]))
+        phase_arrival_dist = dict(zip(phase_list,[[] for i in range(len(phase_list))]))
+
+        arrivals_dist = [
+            model.get_travel_times(
+                source_depth_in_km = self.depth_event,
+                distance_in_degree = d,
+                phase_list         = phase_list,
+                ) for d in dist
+        ]
+
+        for d,arrivals in zip(dist,arrivals_dist):
+            for arrival in arrivals:
+                if arrival.time > 0.0: # The phase actually arrive at this distance
+                    phase_arrival_time[arrival.phase.name].append(arrival.time) 
+                    phase_arrival_dist[arrival.phase.name].append(d) 
+               
+        for phase in phase_list:
+            # convert all to numpy array
+            phase_arrival_dist[phase] = np.array(phase_arrival_dist[phase])
+            phase_arrival_time[phase] = np.array(phase_arrival_time[phase])
+                    
+        # nicer looking colo cycle
+        colors=['#636EFA', '#EF553B', '#00CC96', '#AB63FA', '#FFA15A', '#19D3F3', '#FF6692', '#B6E880', '#FF97FF', '#FECB52']
+        
+        for c,phase in zip(colors,phase_list):
+            if self.get_orientation() == "vertical" :
+                ax.plot(phase_arrival_dist[phase], phase_arrival_time[phase], c="w", lw=3)
+                ax.plot(phase_arrival_dist[phase], phase_arrival_time[phase], label=phase, c=c, lw=2)
+            else :
+                ax.plot(phase_arrival_time[phase], phase_arrival_dist[phase], c="w", lw=3)
+                ax.plot(phase_arrival_time[phase], phase_arrival_dist[phase],label=phase, c=c, lw=2)
+
+        ax.legend(title = f"Taup model : {model_name}", loc = 'upper right')
+
+
     def initiate_map(self):
         
         ax = self.canvas_geo.axes
@@ -1051,16 +1159,23 @@ class MainWindow(QMainWindow):
         self.stream.filter('bandpass', freqmin=self.fmin, freqmax=self.fmax)
         
     def open_map_window(self):
-        
-        self.map_window = GraphWindow(self)
+            
+        self.map_window = MapAndStationTableWindow(self)
         self.map_window.show()
+        
+    def open_map_window_gc(self):
+        
+        self.map_window_gc = MapModelGreatCirlesWindow(self)
+        self.map_window_gc.show()
         
     def closeEvent(self, event):
         
         if self.map_window:
             self.map_window.close()
-
-
+            
+        if self.map_window_gc:
+            self.map_window_gc.close()
+            
     def plot_ulvz(self):
         
         # if it's not the dafault position
@@ -1076,11 +1191,13 @@ class MainWindow(QMainWindow):
         # Compute the barycenter of receivers
         lat_mean_stn, lon_mean_stn = barycenter_on_sphere(self.stations["lat"], self.stations["lon"])
         
+        print(lat_mean_stn, lon_mean_stn)
+        print(self.lat_event, self.lon_event)
+        
         # Barycenter of event and stations barycenter
         lat_mean,lon_mean = barycenter_on_sphere([lat_mean_stn,self.lat_event],[lon_mean_stn,self.lon_event])
         
         return lat_mean,lon_mean
-        
         
 def barycenter_on_sphere(lats,lons):
     """Compute the mean point of the clouds points lats,lons, all inputs and outputs in degrees"""
@@ -1098,9 +1215,10 @@ def barycenter_on_sphere(lats,lons):
     z_mean = Z.sum()/len(Z)
 
     # Convert average x, y, z coordinate to latitude and longitude.
-    lon_mean = np.atan2(y_mean, x_mean)
-    Hyp = np.sqrt(x_mean * x_mean + y_mean * y_mean)
-    lat_mean = np.atan2(z_mean, Hyp)
+    lon_mean = np.arctan2(y_mean, x_mean)
+    Hyp = np.sqrt(x_mean**2 + y_mean**2 + z_mean**2)
+    lat_mean = np.arcsin(z_mean/Hyp)
+    
     
     return lat_mean*180./np.pi,lon_mean*180./np.pi
 
