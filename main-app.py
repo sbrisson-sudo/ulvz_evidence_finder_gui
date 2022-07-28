@@ -643,15 +643,32 @@ class MainWindow(QMainWindow):
         # self.norm_wf_w = QLineEdit()
         # layout_phases.addWidget(self.norm_wf_w)
 
-        # azimuth or distance
+        # time vertical or horizontal
+
+        layout_time_plot = QHBoxLayout()
+        layout_plot_options.addLayout(layout_time_plot)
+
+
         self.horizontal_vertical = QComboBox()
         self.horizontal_vertical.addItems([ "Time vertical" , "Time horizontal" ])
-        layout_plot_options.addWidget(self.horizontal_vertical)
+        layout_time_plot.addWidget(self.horizontal_vertical)
         
         # button for resetting time window
         button_reset_time_bounds = QPushButton("Reset time window")
-        layout_plot_options.addWidget(button_reset_time_bounds)
+        layout_time_plot.addWidget(button_reset_time_bounds)
         button_reset_time_bounds.clicked.connect(self.reset_time_bounds)
+
+        # trace normalisation
+
+        layout_norm = QHBoxLayout()
+        layout_plot_options.addLayout(layout_norm)
+
+        layout_norm.addWidget(QLabel("Normalisation :"))
+
+        self.norm_method_w = QComboBox()
+        self.norm_method_w.addItems([ "trace" , "stream" ])
+        layout_norm.addWidget(self.norm_method_w)
+
         
         # Plotting button
         button_plot = QPushButton("Actualize plot")
@@ -752,7 +769,8 @@ class MainWindow(QMainWindow):
 
         stn_to_exclude = self.get_stn_to_exclude()
         if stn_to_exclude != []:
-            self.exclude_stations(stn_to_exclude, stream=self.stream_save)
+            print("Saving stream, excluding stations : ", stn_to_exclude)
+            self.exclude_stations(stn_to_exclude, self.stream_save)
 
         
         if fileName:
@@ -866,11 +884,13 @@ class MainWindow(QMainWindow):
         ax.cla()  # Clear the canvas.
         # self.canvas.fig.clear(True)
 
+
+
         self.stream.plot(
             type='section', 
             # dist_degree=True, 
             # ev_coord = (self.lat_event,self.lon_event),
-            norm_method = "trace",
+            norm_method = self.get_norm_method(),
             scale = self.get_scale(),
             show=False, 
             reftime = self.origin_time_event,
@@ -922,6 +942,9 @@ class MainWindow(QMainWindow):
 
         self.canvas.draw()
 
+    def get_norm_method(self):
+
+        return self.norm_method_w.currentText()
 
 
     def plot_az_dist_color(self):
@@ -962,7 +985,8 @@ class MainWindow(QMainWindow):
 
         dt_event_str = self.origin_time_event.datetime.strftime("%d %b %Y")
 
-        title = f"Event : {dt_event_str} lat={self.lat_event:.1f}° lon={self.lon_event:.1f}° depth={self.depth_event:.1f}km"
+        # title = f"Event : {dt_event_str} lat={self.lat_event:.1f}° lon={self.lon_event:.1f}° depth={self.depth_event:.1f}km"
+        title = f"Event : {dt_event_str}"
 
         return title
 
@@ -1085,7 +1109,7 @@ class MainWindow(QMainWindow):
         stn_to_exclude = self.get_stn_to_exclude()
         print("Stations to exclude : ", stn_to_exclude)
         if stn_to_exclude != []:
-            self.exclude_stations(stn_to_exclude)
+            self.exclude_stations(stn_to_exclude, self.stream)
                 
         self.update_stream_component()
         
@@ -1136,9 +1160,7 @@ class MainWindow(QMainWindow):
             self.need_actualisation = False
             self.button_stream.setStyleSheet("background-color : white")
 
-    def exclude_stations(self, stn_list, stream=None):
-
-        if not(stream): stream = self.stream
+    def exclude_stations(self, stn_list, stream):
 
         for tr in stream:
             if tr.stats.station in stn_list:
@@ -1258,7 +1280,6 @@ class MainWindow(QMainWindow):
         print(">> printing stations codes")
         ax = self.canvas.axes
         for tr in self.stream:
-
 
 
             if self.get_orientation() == "vertical" :
